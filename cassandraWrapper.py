@@ -2,8 +2,8 @@ import os
 import sys
 import subprocess
 
-def runOSCmd(cmd):
-    print(f'Running cmd: {cmd}')
+def runOScmd(cmd, stdout: bool = False):
+    print(f'Running cmd: {cmd}') if stdout else None
     os.system(cmd)
 
 def startCassandra():
@@ -110,5 +110,5 @@ if __name__ == '__main__':
             runCQLQuery(cql_query)
 
         elif "--reset-db" in argv:
-            runOSCmd("docker kill cassandra && docker network rm cassandra")
+            runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
     
