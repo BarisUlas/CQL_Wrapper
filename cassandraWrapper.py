@@ -10,10 +10,8 @@ def startCassandra():
     # check if cassandra network exists
     cmd = "docker network ls | grep cassandra"
     try:
-        output = subprocess.check_output(cmd, shell=True, text=True)
+        subprocess.check_output(cmd, shell=True, text=True)
     except:
-        output = ""
-    if output == "":
         cmd = "docker network create cassandra"
         os.system(cmd)
     os.system("docker run --rm -d --name cassandra --hostname cassandra --network cassandra cassandra")
