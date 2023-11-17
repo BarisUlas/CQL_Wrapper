@@ -97,6 +97,8 @@ def main():
 
         elif "--init-keyspace" in argv:
             keyspace_str = argv[16:]
+            # try with 2 or 3 replicas
+            # consistency level = 2 or 3
             cql_query = "CREATE KEYSPACE IF NOT EXISTS " + keyspace_str + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };"
             runCQLQuery(cql_query)
             keyspace = keyspace_str
@@ -145,7 +147,7 @@ def main():
             runCQLQuery(cql_query)
             return
 
-        elif "--reset-db" in argv:
+        elif "--close" in argv:
             runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
             return
 
