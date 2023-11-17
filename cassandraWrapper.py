@@ -7,10 +7,20 @@ def runOScmd(cmd, stdout: bool = False):
     os.system(cmd)
 
 def startCassandra():
-    cmd = "docker network create cassandra && docker run --rm -d --name cassandra --hostname cassandra --network cassandra cassandra"
-    os.system(cmd)
+    # check if cassandra network exists
+    cmd = "docker network ls | grep cassandra"
+    try:
+        output = subprocess.check_output(cmd, shell=True, text=True)
+    except:
+        output = ""
+    if output == "":
+        cmd = "docker network create cassandra"
+        os.system(cmd)
+    os.system("docker run --rm -d --name cassandra --hostname cassandra --network cassandra cassandra")
+    
 
 def runCQLQuery(query):
+    output = ""
     with open('query.cql', 'w') as f:
         f.write(query)
 
@@ -70,19 +80,23 @@ if __name__ == '__main__':
     for argv in sys.argv:
         if "--shell" in argv:
             interactiveShell()
+            break
 
         elif "--query" in argv:
             cql_query = input("Enter CQL query: ")
             runCQLQuery(cql_query)
+            break
 
         elif "--start" in argv:
             startCassandra()
+            break
 
         elif "--init-keyspace" in argv:
             keyspace_str = argv[16:]
             cql_query = "CREATE KEYSPACE IF NOT EXISTS " + keyspace_str + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };"
             runCQLQuery(cql_query)
             keyspace = keyspace_str
+            break
 
         elif "--init-table" in argv:
             cql_query = "CREATE TABLE IF NOT EXISTS " + getKeyspace() + ".DEMO (\
@@ -90,25 +104,33 @@ if __name__ == '__main__':
                         meeting_time text\
                         );"
             runCQLQuery(cql_query)
+            break
         
         elif "--insert-data" in argv:
             data_str = argv[14:]
             data_arr = data_str.split(',')
             cql_query = f"INSERT INTO {getKeyspace()}.DEMO (userid, meeting_time) VALUES ('{data_arr[0]}', '{data_arr[1]}');"
             runCQLQuery(cql_query)
+            break
 
         elif "--read-table" in argv:
             cql_query = "SELECT * FROM " + getKeyspace() + ".DEMO;"
             runCQLQuery(cql_query)
+            break
 
         elif "--insert-null" in argv:
             cql_query = "INSERT INTO " + getKeyspace() + ".DEMO (userid, meeting_time) VALUES ('null', 'null');"
             runCQLQuery(cql_query)
+            break
         
         elif "--delete-null" in argv:
             cql_query = "DELETE FROM " + getKeyspace() + ".DEMO WHERE userid = 'null';"
             runCQLQuery(cql_query)
+            break
 
         elif "--reset-db" in argv:
             runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
-    
+            break
+
+    print("Invalid argument: " + argv_array[1])
+    printUsage()    
