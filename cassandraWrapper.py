@@ -28,7 +28,6 @@ def runCQLQuery(query):
         output = subprocess.check_output(cmd, shell=True, text=True)
     except:
         pass
-    print(output)
     return output
     
 
@@ -53,6 +52,10 @@ def getKeyspace():
     for key in complete_output:
         if "system" not in key:
             return key
+        
+def setTracing(toggle: bool):
+    cmd = "tracing on" if toggle else "tracing off"
+    runCQLQuery(cmd)
 
 def printUsage():
     print("\nUsage: python3 cassandraWrapper.py [OPTIONS]")
@@ -60,75 +63,95 @@ def printUsage():
         --start: Start Cassandra\n\
         --shell: Start interactive shell\n\
         --query: Run a CQL query\n\
+        --tracing=true/false: Enable/disable tracing\n\
         --init-keyspace: Initalize keyspace\n\
         --init-table: Initalize table\n\
         --insert-data: Insert hardcoded data\n\
         --insert-null: Insert null data\n\
-        --read-table: Read all data\n\
-        --reset-db: Reset database\n\
+        --print-table: Print table contents\n\
+        --set-null: Delete null data\n\
+        --close: Kill cassandra and remove container from network\n\
     ")
 
-if __name__ == '__main__':
+def main():
     argv_array = sys.argv
     keyspace = ""
 
     if len(argv_array) == 1:
         printUsage()
+        return
 
     for argv in sys.argv:
         if "--shell" in argv:
             interactiveShell()
-            break
+            return
 
         elif "--query" in argv:
             cql_query = input("Enter CQL query: ")
             runCQLQuery(cql_query)
-            break
+            return
 
         elif "--start" in argv:
             startCassandra()
-            break
+            return
 
         elif "--init-keyspace" in argv:
             keyspace_str = argv[16:]
             cql_query = "CREATE KEYSPACE IF NOT EXISTS " + keyspace_str + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };"
             runCQLQuery(cql_query)
             keyspace = keyspace_str
-            break
+            return
+        
+        elif "--tracing" in argv:
+            toggle = bool(argv[9:])
+            output = setTracing(toggle)
+            print(output)
+            return
 
+        elif "--insert-random" in argv:
+            range_str = argv[16:]
+            for i in range(int(range_str)):
+                cql_query = f"INSERT INTO {getKeyspace()}.DEMO (userid, meeting_time) VALUES ('{i}', '{i}');"
+                runCQLQuery(cql_query)
+            return
+        
         elif "--init-table" in argv:
             cql_query = "CREATE TABLE IF NOT EXISTS " + getKeyspace() + ".DEMO (\
                         userid text PRIMARY KEY,\
                         meeting_time text\
                         );"
             runCQLQuery(cql_query)
-            break
+            return
         
         elif "--insert-data" in argv:
             data_str = argv[14:]
             data_arr = data_str.split(',')
             cql_query = f"INSERT INTO {getKeyspace()}.DEMO (userid, meeting_time) VALUES ('{data_arr[0]}', '{data_arr[1]}');"
             runCQLQuery(cql_query)
-            break
+            return
 
-        elif "--read-table" in argv:
+        elif "--print-table" in argv:
             cql_query = "SELECT * FROM " + getKeyspace() + ".DEMO;"
             runCQLQuery(cql_query)
-            break
+            return
 
         elif "--insert-null" in argv:
             cql_query = "INSERT INTO " + getKeyspace() + ".DEMO (userid, meeting_time) VALUES ('null', 'null');"
             runCQLQuery(cql_query)
-            break
+            return
         
         elif "--delete-null" in argv:
             cql_query = "DELETE FROM " + getKeyspace() + ".DEMO WHERE userid = 'null';"
             runCQLQuery(cql_query)
-            break
+            return
 
         elif "--reset-db" in argv:
             runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
-            break
+            return
 
     print("Invalid argument: " + argv_array[1])
     printUsage()    
+
+
+if __name__ == "__main__":
+    main()

@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/cassandraWrapper.py",
-            //"args":["--insert-data=test,test2"],
+            "args":["--tracing=true"],
             "console": "integratedTerminal",
             "justMyCode": true
         }
