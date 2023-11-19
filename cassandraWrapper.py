@@ -1,6 +1,41 @@
 import os
 import sys
 import subprocess
+from cassandra.cluster import Cluster
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+session = None
+
+def start_session():
+    # start cassandra container that exposes tcp port to accept connections outside of docker
+    exposeCassandra()
+
+    global session
+    # Connect to the Cassandra cluster
+    cluster = Cluster(['127.0.0.1'])
+    session = cluster.connect()
+
+def close_session():
+    global session
+    session.shutdown()
+
+def session_cmd(cmd):
+    global session
+    return session.execute(cmd)
+
+def exposeCassandra():
+    # from https://stackoverflow.com/questions/47672400/connecting-to-cassandra-running-in-docker
+    runOScmd("docker run -p 9042:9042 --rm --name cassandra_exposed -d cassandra:latest")
 
 def runOScmd(cmd, stdout: bool = False):
     print(f'Running cmd: {cmd}') if stdout else None
@@ -60,7 +95,11 @@ def setTracing(toggle: bool):
 def printUsage():
     print("\nUsage: python3 cassandraWrapper.py [OPTIONS]")
     print("OPTIONS:\n\
-        --start: Start Cassandra\n\
+        --start-session: Start a Cassandra session\n\
+        --close-session: Close active Cassandra session\n\
+        --session-cmd: Send cmd to Cassandra cluster\n"
+        + bcolors.WARNING + "\n[!] OPTIONS BELOW USES CQLSH WITH SUBPROCESS AND ARE DEPRECATED\n" + bcolors.ENDC +
+        "\t--start: Start Cassandra\n\
         --shell: Start interactive shell\n\
         --query: Run a CQL query\n\
         --tracing=true/false: Enable/disable tracing\n\
