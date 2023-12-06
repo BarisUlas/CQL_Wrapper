@@ -122,25 +122,32 @@ def getKeyspace():
 def printUsage():
     print("\nCassandra interactive shell wrapper\n")
     print("COMMANDS:\n\
-        initKeyspace [replication_factor] - initialize keyspace with replication factor\n\
-        tracing [on/off] - toggle tracing on/off\n\
+        ks [replication_factor] - initialize keyspace with replication factor\n\
+        initTable - initialize table\n\
+        insert [userid] [meeting_time] - insert data into table\n\
+        delete [userid] - delete data from table\n\
+        print - print all data from table\n\
+        clevel [consistency_level] - set consistency level\n\
+        help - print this message\n\
     ")
 
 def searchExistingCassandraSession():
     # search for existing cassandra container
     cmd = "docker ps | grep cassandra"
+    err = ""
     output = ""
     try:
-        output = subprocess.check_output(cmd, shell=True, text=True)
+        result = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        err = result.stderr
+        output = result.stdout
+
     except:
-        print("exception")
-        print(str(len(output)))
-        if len(output) > 0:
-            print("Cassandra container is not running, starting new one...")
-            # docker is not running, stop here
-            exit()
-        else:
-            pass
+        print("an error occured while checking for Docker, terminating script")
+        exit()
+
+    if err != "":
+        print(bcolors.FAIL + "Docker is not running, terminating script" + bcolors.ENDC)
+        exit()
 
     if output != "":
         _input = input("Found existing Cassandra container, would you like to connect to it? (Y/n): ")
@@ -151,20 +158,21 @@ def searchExistingCassandraSession():
             start_session()
             return
     else:
-        _input = input("No existing Cassandra container found. Would you like to start a new one? (Y/n): ")
+        _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
         if _input == "n":
             exit()
         elif _input == "Y" or _input == "y" or _input == "":
             properlyStartCassandra()
             global session
             # Connect to the Cassandra cluster
+            print(bcolors.OKGREEN + "Successfully created a Cassandra container" + bcolors.ENDC)
             print("Waiting for Cassandra cluster to start", end='', flush=True)
             while True:
                 try:
                     # specify port 9043 to connect to exposed cassandra
                     cluster = Cluster(['127.0.0.1'], port=9042)
                     session = cluster.connect()
-                    print("\nConnected to Cassandra cluster!\nSession: " + str(session))
+                    print("\n" + bcolors.OKGREEN + "Connected to Cassandra cluster!\nSession: " + str(session) + bcolors.ENDC)
                     break
                 except Exception as e:
                     print(".", end='', flush=True)
@@ -241,10 +249,6 @@ def main():
                 for row in output:
                     print(row)
                 continue
-
-            elif "--close" == _input:
-                runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
-                continue 
 
         except Exception as e:
             print("an exception occurred: " + e.__str__())
