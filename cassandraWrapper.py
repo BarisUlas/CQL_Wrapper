@@ -1,7 +1,11 @@
+#!/usr/bin/env python3
 import os
 import sys
 import subprocess
+import time
 from cassandra.cluster import Cluster
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 
 class bcolors:
     HEADER = '\033[95m'
@@ -15,27 +19,55 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 session = None
+lookup_consistency_level = ConsistencyLevel.ONE
+
 
 def start_session():
-    # start cassandra container that exposes tcp port to accept connections outside of docker
-    exposeCassandra()
 
     global session
     # Connect to the Cassandra cluster
-    cluster = Cluster(['127.0.0.1'])
-    session = cluster.connect()
+    try:
+        cluster = Cluster(['127.0.0.1'])
+        session = cluster.connect()
+        print("Connected to Cassandra cluster\nSession: " + str(session))
+    except:
+        print("Failed to connect to Cassandra cluster, is it exposed and running?")
+        return
+    
+def properlyStartCassandra():
+    cmd = "docker network create cassandra_exposed"
+    os.system(cmd)
+
+    cmd = "docker run --rm -d -p 9042:9042 --name cassandra_exposed --hostname cassandra_exposed --network cassandra_exposed cassandra"
+    os.system(cmd)
+
 
 def close_session():
     global session
     session.shutdown()
+    print("Closed Cassandra session")
 
 def session_cmd(cmd):
     global session
-    return session.execute(cmd)
+    global lookup_consistency_level
 
-def exposeCassandra():
-    # from https://stackoverflow.com/questions/47672400/connecting-to-cassandra-running-in-docker
-    runOScmd("docker run -p 9042:9042 --rm --name cassandra_exposed -d cassandra:latest")
+    print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
+    print("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
+    
+    SimpleStatement(cmd, consistency_level=lookup_consistency_level)
+    # get output from cmd
+    output = ""
+    try:
+        output = session.execute(cmd)
+    except Exception as e:
+        print("Failed to execute cmd: " + e.__str__())
+        return
+    return output
+
+
+def initKeyspace(replication_factor: int):
+    cql_query = "CREATE KEYSPACE IF NOT EXISTS demo WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : " + str(replication_factor) + " };"
+    session_cmd(cql_query)
 
 def runOScmd(cmd, stdout: bool = False):
     print(f'Running cmd: {cmd}') if stdout else None
@@ -71,14 +103,13 @@ def interactiveShell():
     os.system(cmd)
 
 def getKeyspace():
-    query_output = runCQLQuery("DESCRIBE KEYSPACES;")
+    query_output = session_cmd("DESCRIBE KEYSPACES;")
     query_output = query_output.split('\n')
     # remove first 4 elements and last 2 elements from query_output list
     query_output = query_output[4:-3]
 
     complete_output = []
     for output in query_output:
-            
         output = output.split(" ")
         while '' in output:
             output.remove('')
@@ -87,111 +118,144 @@ def getKeyspace():
     for key in complete_output:
         if "system" not in key:
             return key
-        
-def setTracing(toggle: bool):
-    cmd = "tracing on" if toggle else "tracing off"
-    runCQLQuery(cmd)
 
 def printUsage():
-    print("\nUsage: python3 cassandraWrapper.py [OPTIONS]")
-    print("OPTIONS:\n\
-        --start-session: Start a Cassandra session\n\
-        --close-session: Close active Cassandra session\n\
-        --session-cmd: Send cmd to Cassandra cluster\n"
-        + bcolors.WARNING + "\n[!] OPTIONS BELOW USES CQLSH WITH SUBPROCESS AND ARE DEPRECATED\n" + bcolors.ENDC +
-        "\t--start: Start Cassandra\n\
-        --shell: Start interactive shell\n\
-        --query: Run a CQL query\n\
-        --tracing=true/false: Enable/disable tracing\n\
-        --init-keyspace: Initalize keyspace\n\
-        --init-table: Initalize table\n\
-        --insert-data: Insert hardcoded data\n\
-        --insert-null: Insert null data\n\
-        --print-table: Print table contents\n\
-        --set-null: Delete null data\n\
-        --close: Kill cassandra and remove container from network\n\
+    print("\nCassandra interactive shell wrapper\n")
+    print("COMMANDS:\n\
+        initKeyspace [replication_factor] - initialize keyspace with replication factor\n\
+        tracing [on/off] - toggle tracing on/off\n\
     ")
 
-def main():
-    argv_array = sys.argv
-    keyspace = ""
+def searchExistingCassandraSession():
+    # search for existing cassandra container
+    cmd = "docker ps | grep cassandra"
+    output = ""
+    try:
+        output = subprocess.check_output(cmd, shell=True, text=True)
+    except:
+        print("exception")
+        print(str(len(output)))
+        if len(output) > 0:
+            print("Cassandra container is not running, starting new one...")
+            # docker is not running, stop here
+            exit()
+        else:
+            pass
 
-    if len(argv_array) == 1:
-        printUsage()
+    if output != "":
+        _input = input("Found existing Cassandra container, would you like to connect to it? (Y/n): ")
+        if _input == "n":
+            return
+        elif _input == "Y" or _input == "y" or _input == "":
+            print("Connecting to existing Cassandra container...")
+            start_session()
+            return
+    else:
+        _input = input("No existing Cassandra container found. Would you like to start a new one? (Y/n): ")
+        if _input == "n":
+            exit()
+        elif _input == "Y" or _input == "y" or _input == "":
+            properlyStartCassandra()
+            global session
+            # Connect to the Cassandra cluster
+            print("Waiting for Cassandra cluster to start", end='', flush=True)
+            while True:
+                try:
+                    # specify port 9043 to connect to exposed cassandra
+                    cluster = Cluster(['127.0.0.1'], port=9042)
+                    session = cluster.connect()
+                    print("\nConnected to Cassandra cluster!\nSession: " + str(session))
+                    break
+                except Exception as e:
+                    print(".", end='', flush=True)
+                    time.sleep(1)
+                    continue
+                    
         return
 
-    for argv in sys.argv:
-        if "--shell" in argv:
-            interactiveShell()
-            return
+def main():
+    searchExistingCassandraSession()
 
-        elif "--query" in argv:
-            cql_query = input("Enter CQL query: ")
-            runCQLQuery(cql_query)
-            return
+    keyspace = ""
+    _input = ""
 
-        elif "--start" in argv:
-            startCassandra()
-            return
+    global lookup_consistency_level
+    global session
 
-        elif "--init-keyspace" in argv:
-            keyspace_str = argv[16:]
-            # try with 2 or 3 replicas
-            # consistency level = 2 or 3
-            cql_query = "CREATE KEYSPACE IF NOT EXISTS " + keyspace_str + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };"
-            runCQLQuery(cql_query)
-            keyspace = keyspace_str
-            return
-        
-        elif "--tracing" in argv:
-            toggle = bool(argv[9:])
-            output = setTracing(toggle)
-            print(output)
-            return
+    while _input != "exit":
+        try:
+            _input = input("\n> ")
+            if _input == "help":
+                printUsage()
+                continue
 
-        elif "--insert-random" in argv:
-            range_str = argv[16:]
-            for i in range(int(range_str)):
-                cql_query = f"INSERT INTO {getKeyspace()}.DEMO (userid, meeting_time) VALUES ('{i}', '{i}');"
-                runCQLQuery(cql_query)
-            return
-        
-        elif "--init-table" in argv:
-            cql_query = "CREATE TABLE IF NOT EXISTS " + getKeyspace() + ".DEMO (\
-                        userid text PRIMARY KEY,\
-                        meeting_time text\
-                        );"
-            runCQLQuery(cql_query)
-            return
-        
-        elif "--insert-data" in argv:
-            data_str = argv[14:]
-            data_arr = data_str.split(',')
-            cql_query = f"INSERT INTO {getKeyspace()}.DEMO (userid, meeting_time) VALUES ('{data_arr[0]}', '{data_arr[1]}');"
-            runCQLQuery(cql_query)
-            return
+            elif "clevel" in _input:
+                lookup_consistency_level = _input.split(' ')[1]
+                lookup_consistency_level = lookup_consistency_level.upper()
+                lookup_consistency_level = ConsistencyLevel.__dict__[lookup_consistency_level]
+                print("Consistency level set to: " + bcolors.OKBLUE + bcolors.BOLD + str(lookup_consistency_level) + bcolors.ENDC)
+                continue
 
-        elif "--print-table" in argv:
-            cql_query = "SELECT * FROM " + getKeyspace() + ".DEMO;"
-            runCQLQuery(cql_query)
-            return
+            elif "ks" in _input:
+                keyspace_str = _input.split(' ')[1]
+                print(keyspace_str)
+                initKeyspace(int(keyspace_str))
+                continue
 
-        elif "--insert-null" in argv:
-            cql_query = "INSERT INTO " + getKeyspace() + ".DEMO (userid, meeting_time) VALUES ('null', 'null');"
-            runCQLQuery(cql_query)
-            return
-        
-        elif "--delete-null" in argv:
-            cql_query = "DELETE FROM " + getKeyspace() + ".DEMO WHERE userid = 'null';"
-            runCQLQuery(cql_query)
-            return
+            elif "grace" in _input:
+                grace = _input.split(' ')[1]
+                cql_query = f"ALTER TABLE demo.DEMO WITH gc_grace_seconds = '{grace}';"
+                session_cmd(cql_query)
+                continue
+            
+            elif "tracing" in _input:
+                toggle = _input.split(' ')[1] == "on"
+                _input = _input.upper()
+                session_cmd(_input + ";")
+                continue
+            
+            elif "initTable" == _input:
+                cql_query = "CREATE TABLE IF NOT EXISTS demo.DEMO (\
+                            userid text PRIMARY KEY,\
+                            meeting_time text\
+                            );"
+                session_cmd(cql_query)
+                continue
+            
+            elif "insert" in _input:
+                data_arr = _input.split(' ')[1:]
+                query = f"INSERT INTO demo.DEMO (userid, meeting_time) VALUES ('{data_arr[0]}', '{data_arr[1]}');"
+                print(query)
+                session_cmd(query)
+                continue
 
-        elif "--close" in argv:
-            runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
-            return
+            elif "delete" in _input:
+                data_arr = _input.split(' ')
+                query = f"DELETE FROM demo.DEMO WHERE userid = '{data_arr[1]}';"
+                session_cmd(query)
+                continue
 
-    print("Invalid argument: " + argv_array[1])
-    printUsage()    
+            elif "print" in _input:
+                cql_query = "SELECT * FROM demo.DEMO;"
+                output = session_cmd(cql_query)
+                for row in output:
+                    print(row)
+                continue
+
+            elif "--close" == _input:
+                runOScmd("docker kill cassandra && docker network rm cassandra", stdout=True)
+                continue 
+
+        except Exception as e:
+            print("an exception occurred: " + e.__str__())
+            continue
+
+    close_session()
+
+    opt = input("Would you like to remove Cassandra from Docker network? (y/N): ")
+    if opt == "y" or opt == "Y":
+        runOScmd("docker kill cassandra_exposed && docker network rm cassandra_exposed", stdout=True)
+        exit()
 
 
 if __name__ == "__main__":
