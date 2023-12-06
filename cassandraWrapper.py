@@ -175,7 +175,7 @@ def main():
     global lookup_consistency_level
     global session
 
-    while _input != "exit":
+    while True:
         try:
             try:
                 _input = input("\n> ")
@@ -185,6 +185,9 @@ def main():
             if _input == "help":
                 printUsage()
                 continue
+
+            elif _input == "exit":
+                break
 
             elif "clevel" in _input:
                 temp_consistency_level = _input.split(' ')[1]
