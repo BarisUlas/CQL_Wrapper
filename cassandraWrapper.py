@@ -69,19 +69,10 @@ def initKeyspace(replication_factor: int):
     cql_query = "CREATE KEYSPACE IF NOT EXISTS demo WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : " + str(replication_factor) + " };"
     session_cmd(cql_query)
 
+
 def runOScmd(cmd, stdout: bool = False):
     print(f'Running cmd: {cmd}') if stdout else None
-    os.system(cmd)
-
-def startCassandra():
-    # check if cassandra network exists
-    cmd = "docker network ls | grep cassandra"
-    try:
-        subprocess.check_output(cmd, shell=True, text=True)
-    except:
-        cmd = "docker network create cassandra"
-        os.system(cmd)
-    os.system("docker run --rm -d --name cassandra --hostname cassandra --network cassandra cassandra")
+    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
 
 def runCQLQuery(query):
@@ -97,10 +88,6 @@ def runCQLQuery(query):
         pass
     return output
     
-
-def interactiveShell():
-    cmd = "docker run --rm -it --network cassandra nuvo/docker-cqlsh cqlsh cassandra 9042 --cqlversion='3.4.6'"
-    os.system(cmd)
 
 def getKeyspace():
     query_output = session_cmd("DESCRIBE KEYSPACES;")
