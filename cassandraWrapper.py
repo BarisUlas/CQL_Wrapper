@@ -140,7 +140,10 @@ def searchExistingCassandraSession():
         return
     
     else:
-        _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
+        try:
+            _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
+        except KeyboardInterrupt:
+            exit()
         if _input == "n":
             exit()
         elif _input == "Y" or _input == "y" or _input == "":
@@ -245,7 +248,11 @@ def main():
     print("\nClosing Cassandra session")
     close_session()
 
-    opt = input("Would you like to remove Cassandra from Docker network? (y/N): ")
+    try:
+        opt = input("Would you like to remove Cassandra from Docker network? (y/N): ")
+    except KeyboardInterrupt:
+        opt = ""
+
     if opt == "y" or opt == "Y":
         runOScmd("docker kill cassandra_exposed && docker network rm cassandra_exposed", stdout=True)
         exit()
