@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import os
-import sys
 import subprocess
 import time
 from cassandra.cluster import Cluster
@@ -186,9 +184,9 @@ def main():
                 continue
 
             elif "clevel" in _input:
-                lookup_consistency_level = _input.split(' ')[1]
-                lookup_consistency_level = lookup_consistency_level.upper()
-                lookup_consistency_level = ConsistencyLevel.__dict__[lookup_consistency_level]
+                temp_consistency_level = _input.split(' ')[1]
+                temp_consistency_level = temp_consistency_level.upper()
+                lookup_consistency_level = ConsistencyLevel.__dict__[temp_consistency_level]
                 print("Consistency level set to: " + bcolors.OKBLUE + bcolors.BOLD + str(lookup_consistency_level) + bcolors.ENDC)
                 continue
 
