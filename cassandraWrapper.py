@@ -36,10 +36,10 @@ def start_session():
     
 def properlyStartCassandra():
     cmd = "docker network create cassandra_exposed"
-    os.system(cmd)
+    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     cmd = "docker run --rm -d -p 9042:9042 --name cassandra_exposed --hostname cassandra_exposed --network cassandra_exposed cassandra"
-    os.system(cmd)
+    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def close_session():
@@ -60,7 +60,7 @@ def session_cmd(cmd):
     try:
         output = session.execute(cmd)
     except Exception as e:
-        print("Failed to execute cmd: " + e.__str__())
+        print(bcolors.FAIL + "Failed to execute cmd: " + e.__str__() + bcolors.ENDC)
         return
     return output
 
@@ -150,13 +150,10 @@ def searchExistingCassandraSession():
         exit()
 
     if output != "":
-        _input = input("Found existing Cassandra container, would you like to connect to it? (Y/n): ")
-        if _input == "n":
-            return
-        elif _input == "Y" or _input == "y" or _input == "":
-            print("Connecting to existing Cassandra container...")
-            start_session()
-            return
+        print("Found existing Cassandra container, attempting to connect...")        
+        start_session()
+        return
+    
     else:
         _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
         if _input == "n":
@@ -192,7 +189,11 @@ def main():
 
     while _input != "exit":
         try:
-            _input = input("\n> ")
+            try:
+                _input = input("\n> ")
+            except KeyboardInterrupt:
+                break
+
             if _input == "help":
                 printUsage()
                 continue
@@ -249,11 +250,14 @@ def main():
                 for row in output:
                     print(row)
                 continue
-
+            else:
+                print("Invalid command, type help for usage")
+                continue
         except Exception as e:
-            print("an exception occurred: " + e.__str__())
+            print(bcolors.WARNING + bcolors.UNDERLINE + "An expection occured\n\n" + e.__str__() + bcolors.ENDC)
             continue
-
+    
+    print("\nClosing Cassandra session")
     close_session()
 
     opt = input("Would you like to remove Cassandra from Docker network? (y/N): ")
