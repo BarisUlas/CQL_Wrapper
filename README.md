@@ -5,4 +5,5 @@ Requires [cassandra docker installation](https://cassandra.apache.org/_/quicksta
 
 ### Usage
 Run a docker instance with `cassandra:latest` image installed.   
-Then, `python3 cassandraWrapper.py`
+First make it executable: `chmod +x cassandraWrapper.py`   
+Then run it: `./cassandraWrapper.py`   
