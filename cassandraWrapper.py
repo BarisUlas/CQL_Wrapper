@@ -4,6 +4,9 @@ import time
 from cassandra.cluster import Cluster
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
+from threading import Thread, Lock
+import random
+import string
 
 class bcolors:
     HEADER = '\033[95m'
@@ -18,6 +21,7 @@ class bcolors:
 
 session = None
 lookup_consistency_level = ConsistencyLevel.ONE
+mutex = Lock()
 
 
 def start_session():
@@ -39,6 +43,22 @@ def properlyStartCassandra():
     cmd = "docker run --rm -d -p 9042:9042 --name cassandra_exposed --hostname cassandra_exposed --network cassandra_exposed cassandra"
     subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+
+def randomString(stringLength=10):
+        letters = string.ascii_lowercase
+        return ''.join(random.choice(letters) for i in range(stringLength))
+
+
+def insertMultiThreaded():
+    global session
+    global lookup_consistency_level
+
+    global mutex
+    mutex.acquire()
+    query = f"INSERT INTO demo.DEMO (userid, meeting_time) VALUES ('{randomString()}', '{randomString()}');"
+    session_cmd(query)
+    mutex.release()
+    
 
 def close_session():
     global session
@@ -106,14 +126,17 @@ def getKeyspace():
 
 def printUsage():
     print("\nCassandra interactive shell wrapper\n")
-    print("COMMANDS:\n\
-        ks [replication_factor] - initialize keyspace with replication factor\n\
-        initTable - initialize table\n\
-        insert [userid] [meeting_time] - insert data into table\n\
-        delete [userid] - delete data from table\n\
-        print - print all data from table\n\
-        clevel [consistency_level] - set consistency level\n\
-        help - print this message\n\
+    print(bcolors.BOLD + bcolors.UNDERLINE + "COMMANDS:" + bcolors.ENDC + "\n\n\
+ks [replication_factor]        - initialize keyspace with replication factor\n\
+initTable                      - initialize table\n\
+insert [userid] [meeting_time] - insert data into table\n\
+delete [userid]                - delete data from table\n\
+print                          - print all data from table\n\
+clevel [consistency_level]     - set consistency level\n\
+mt                             - multi-threaded insert\n\
+session                        - start another session\n\
+switch                         - switch between sessions\n\
+help                           - print this message\n\
     ")
 
 def searchExistingCassandraSession():
@@ -188,6 +211,16 @@ def main():
 
             elif _input == "exit":
                 break
+        
+            elif "mt" in _input:
+                thread_count = int(_input.split(' ')[1])
+                threads = []
+                for i in range(thread_count):
+                    threads.append(Thread(target=insertMultiThreaded))
+                    threads[i].start()
+                for i in range(thread_count):
+                    threads[i].join()
+                continue
 
             elif "clevel" in _input:
                 temp_consistency_level = _input.split(' ')[1]
