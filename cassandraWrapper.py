@@ -7,6 +7,7 @@ from cassandra.query import SimpleStatement
 from threading import Thread, Lock
 import random
 import string
+import docker
 
 class bcolors:
     HEADER = '\033[95m'
@@ -22,7 +23,7 @@ class bcolors:
 session = None
 lookup_consistency_level = ConsistencyLevel.ONE
 mutex = Lock()
-
+session_list = []
 
 def start_session():
 
@@ -31,7 +32,8 @@ def start_session():
     try:
         cluster = Cluster(['127.0.0.1'])
         session = cluster.connect()
-        print("Connected to Cassandra cluster\nSession: " + str(session))
+        session_list.append(session)
+        print("Connected to Cassandra cluster\n" + bcolors.OKGREEN + bcolors.BOLD + "Session ID: " + str(session.session_id) + bcolors.ENDC)
     except:
         print("Failed to connect to Cassandra cluster, is it exposed and running?")
         return
@@ -54,10 +56,10 @@ def insertMultiThreaded():
     global lookup_consistency_level
 
     global mutex
-    mutex.acquire()
+    #mutex.acquire()
     query = f"INSERT INTO demo.DEMO (userid, meeting_time) VALUES ('{randomString()}', '{randomString()}');"
     session_cmd(query)
-    mutex.release()
+    #mutex.release()
     
 
 def close_session():
@@ -123,10 +125,45 @@ def getKeyspace():
     for key in complete_output:
         if "system" not in key:
             return key
+        
+def switchSession(idx=None):
+    global session
+    global session_list
+
+    if len(session_list) == 0:
+        print("No existing sessions")
+        return
+    
+    if idx != None:
+        session = session_list[idx]
+        print("Successfully switched session to: " + bcolors.OKGREEN + bcolors.BOLD + str(session.session_id) + bcolors.ENDC)
+        return
+
+    print("Existing sessions:")
+    for i in range(len(session_list)):
+        print(f"[{i}] {session_list[i].session_id}")
+
+    try:
+        session_index = int(input("Enter session index: "))
+    except KeyboardInterrupt:
+        return
+    except:
+        print("Invalid input")
+        return
+
+    if session_index >= len(session_list):
+        print("Invalid session index")
+        return
+
+    session = session_list[session_index]
+    print("Successfully switched session to: " + bcolors.OKGREEN + bcolors.BOLD + str(session.session_id) + bcolors.ENDC)
 
 def printUsage():
     print("\nCassandra interactive shell wrapper\n")
     print(bcolors.BOLD + bcolors.UNDERLINE + "COMMANDS:" + bcolors.ENDC + "\n\n\
+help                           - print this message\n\
+start                          - start a new session\n\
+switch [session index]         - switch to another session\n\
 ks [replication_factor]        - initialize keyspace with replication factor\n\
 initTable                      - initialize table\n\
 insert [userid] [meeting_time] - insert data into table\n\
@@ -134,35 +171,24 @@ delete [userid]                - delete data from table\n\
 print                          - print all data from table\n\
 clevel [consistency_level]     - set consistency level\n\
 mt                             - multi-threaded insert\n\
-session                        - start another session\n\
-switch                         - switch between sessions\n\
-help                           - print this message\n\
     ")
 
 def searchExistingCassandraSession():
-    # search for existing cassandra container
-    cmd = "docker ps | grep cassandra"
-    err = ""
-    output = ""
+
+    # use docker library to check if docker is running
     try:
-        result = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        err = result.stderr
-        output = result.stdout
-
+        client = docker.from_env()
     except:
-        print("an error occured while checking for Docker, terminating script")
+        print(bcolors.FAIL + "aDocker is not running, terminating script" + bcolors.ENDC)
         exit()
-
-    if err != "":
-        print(bcolors.FAIL + "Docker is not running, terminating script" + bcolors.ENDC)
-        exit()
-
-    if output != "":
-        print("Found existing Cassandra container, attempting to connect...")        
+    
+    # search for existing cassandra container using docker library
+    try:
+        client.containers.get('cassandra_exposed')
+        print("Found existing Cassandra container, attempting to connect...")
         start_session()
         return
-    
-    else:
+    except:
         try:
             _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
         except KeyboardInterrupt:
@@ -181,6 +207,9 @@ def searchExistingCassandraSession():
                     cluster = Cluster(['127.0.0.1'], port=9042)
                     session = cluster.connect()
                     print("\n" + bcolors.OKGREEN + "Connected to Cassandra cluster!\nSession: " + str(session) + bcolors.ENDC)
+                    
+                    global session_list
+                    session_list.append(session)
                     break
                 except Exception as e:
                     print(".", end='', flush=True)
@@ -211,6 +240,17 @@ def main():
 
             elif _input == "exit":
                 break
+
+            elif "start" == _input:
+                start_session()
+                continue
+
+            elif "switch" in _input:
+                if len(_input.split(' ')) == 1:
+                    switchSession()
+                else:
+                    switchSession(int(_input.split(' ')[1]))
+                continue
         
             elif "mt" in _input:
                 thread_count = int(_input.split(' ')[1])
