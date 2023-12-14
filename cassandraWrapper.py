@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import subprocess
+import sys
 import time
 from cassandra.cluster import Cluster
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
+import cassandra.cluster
 from threading import Thread, Lock
 import random
 import string
@@ -20,30 +22,81 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
-session = None
+cassandra_session = None
 lookup_consistency_level = ConsistencyLevel.ONE
 mutex = Lock()
 session_list = []
+docker_client = None
 
-def start_session():
+def startSession(ip_address, port, cold=False):
 
-    global session
+    global cassandra_session
     # Connect to the Cassandra cluster
+    print("\nAttempting to connect to Cassandra cluster at " + ip_address + " on port " + str(port))
+    if cold:
+        while True:
+            try:
+                cluster = Cluster([ip_address], port=port)
+                cassandra_session = cluster.connect()
+                break
+            except Exception as e:
+                if "ConnectionShutdown" in e.__str__():
+                    print(".", end='', flush=True)
+                    time.sleep(1)
+                else:
+                    print(bcolors.BOLD + bcolors.FAIL + "Unexpected exception occured: " + e.__str__() + bcolors.ENDC)
+                    print(bcolors.OKBLUE + bcolors.BOLD + "hint: check if 127.0.0.x is up: " + bcolors.ENDC\
+                          + "sudo ifconfig lo0 alias 127.0.0.x up")
+                    exit(-1)
     try:
-        cluster = Cluster(['127.0.0.1'])
-        session = cluster.connect()
-        session_list.append(session)
-        print("Connected to Cassandra cluster\n" + bcolors.OKGREEN + bcolors.BOLD + "Session ID: " + str(session.session_id) + bcolors.ENDC)
-    except:
-        print("Failed to connect to Cassandra cluster, is it exposed and running?")
-        return
+        cluster = Cluster([ip_address], port=port)
+        cassandra_session = cluster.connect()
+        session_list.append(cassandra_session)
+        print(bcolors.OKGREEN + bcolors.BOLD + "\nConnected to Cassandra cluster at " + ip_address + "\nSession ID: " + str(cassandra_session.session_id) + bcolors.ENDC)
     
-def properlyStartCassandra():
-    cmd = "docker network create cassandra_exposed"
-    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except cassandra.cluster.NoHostAvailable:
+        print("Node still initializing, please wait")
+        startSession(ip_address, port, cold=True)
+        return
+    except Exception as e:
+        print(bcolors.FAIL + bcolors.BOLD + "Failed to connect to Cassandra cluster, check the IP Address and port" + bcolors.ENDC)
+        exit(-1)
+    
+def getCassandraInstanceTuple(current=False):
+    # returns (next_cassandra_instance_name, next_cassandra_instance_port, next_cassandra_instance_ip)
 
-    cmd = "docker run --rm -d -p 9042:9042 --name cassandra_exposed --hostname cassandra_exposed --network cassandra_exposed cassandra"
-    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    global docker_client    
+
+    last_cassandra_instance = 0
+    networks = docker_client.networks.list()
+    for network in networks:
+        if "cassandra_node_" in network.name:
+            last_cassandra_instance = int(network.name.split('_')[-1]) if current else int(network.name.split('_')[-1]) + 1
+
+    return (f"cassandra_node_{str(last_cassandra_instance)}", 9042 + last_cassandra_instance, f"127.0.0.{str(last_cassandra_instance + 1)}")
+
+
+def createNode(initial=False):
+
+    global docker_client   
+
+    if initial:
+        node_name = "cassandra_node_0"
+        port = "9042"
+        ip = "127.0.0.1"
+    else:
+        next_tuple = getCassandraInstanceTuple()
+        node_name = next_tuple[0]
+        port = next_tuple[1]
+        ip = next_tuple[2]
+
+    try:
+        docker_client.networks.create(node_name, driver="bridge")
+        docker_client.containers.run("cassandra", name=node_name, hostname=node_name, detach=True, network=node_name, ports={f'{port}/tcp': port})
+    except Exception as e:
+        print(bcolors.FAIL + f"Failed to create {node_name} at {ip} on port {port}" + bcolors.ENDC)
+        print(e.__str__())
+        exit(-1)
 
 
 def randomString(stringLength=10):
@@ -52,8 +105,6 @@ def randomString(stringLength=10):
 
 
 def insertMultiThreaded():
-    global session
-    global lookup_consistency_level
 
     global mutex
     #mutex.acquire()
@@ -63,12 +114,12 @@ def insertMultiThreaded():
     
 
 def close_session():
-    global session
-    session.shutdown()
+    global cassandra_session
+    cassandra_session.shutdown()
     print("Closed Cassandra session")
 
 def session_cmd(cmd):
-    global session
+    global cassandra_session
     global lookup_consistency_level
 
     print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
@@ -78,7 +129,7 @@ def session_cmd(cmd):
     # get output from cmd
     output = ""
     try:
-        output = session.execute(cmd)
+        output = cassandra_session.execute(cmd)
     except Exception as e:
         print(bcolors.FAIL + "Failed to execute cmd: " + e.__str__() + bcolors.ENDC)
         return
@@ -127,7 +178,7 @@ def getKeyspace():
             return key
         
 def switchSession(idx=None):
-    global session
+    global cassandra_session
     global session_list
 
     if len(session_list) == 0:
@@ -135,7 +186,7 @@ def switchSession(idx=None):
         return
     
     if idx != None:
-        session = session_list[idx]
+        cassandra_session = session_list[idx]
         print("Successfully switched session to: " + bcolors.OKGREEN + bcolors.BOLD + str(session.session_id) + bcolors.ENDC)
         return
 
@@ -155,7 +206,7 @@ def switchSession(idx=None):
         print("Invalid session index")
         return
 
-    session = session_list[session_index]
+    sescassandra_sessionsion = session_list[session_index]
     print("Successfully switched session to: " + bcolors.OKGREEN + bcolors.BOLD + str(session.session_id) + bcolors.ENDC)
 
 def printUsage():
@@ -171,23 +222,66 @@ delete [userid]                - delete data from table\n\
 print                          - print all data from table\n\
 clevel [consistency_level]     - set consistency level\n\
 mt                             - multi-threaded insert\n\
+stress [num_threads]           - multi-session insertion stress test\n\
     ")
+
+def removeNetwork():
+    # use docker library to remove docker containers from network
+        global docker_client
+        docker_client = docker.from_env()
+        docker_network = docker_client.networks.list()
+        for network in docker_network:
+            if "cassandra_node_" in network.name:
+                print("Removing container: " + network.name)
+                try:
+                    docker_client.networks.get(network.id).remove()
+                except Exception as e:
+                    print(bcolors.FAIL + "Failed to remove network: " + network.name + bcolors.ENDC)
+                    print(e.__str__())
+                    continue
 
 def searchExistingCassandraSession():
 
     # use docker library to check if docker is running
+    global docker_client
+    global cassandra_session
+    
     try:
-        client = docker.from_env()
+        docker_client = docker.from_env()
     except:
-        print(bcolors.FAIL + "aDocker is not running, terminating script" + bcolors.ENDC)
+        print(bcolors.FAIL + "Docker is not running, terminating script" + bcolors.ENDC)
         exit()
     
     # search for existing cassandra container using docker library
     try:
-        client.containers.get('cassandra_exposed')
-        print("Found existing Cassandra container, attempting to connect...")
-        start_session()
+        # list all containers
+        containers = docker_client.containers.list()
+        cassandra_containers = []
+
+        for idx, container in enumerate(containers):
+            if "cassandra" in container.name:
+                cassandra_containers.append(container)
+                print(f"[{idx}] {container.name}")
+        
+        print("Found " + str(len(cassandra_containers)) + " Cassandra container(s)")
+        if len(cassandra_containers) == 0:
+            raise Exception("No Cassandra containers found")
+        
+        elif True:
+
+            next_tuple = getCassandraInstanceTuple(current=True)
+            node_name = next_tuple[0]
+            port = next_tuple[1]
+            ip = next_tuple[2]
+
+            #startSession(ip, port, node_name)
+            startSession("127.0.0.1", "9042")
+            return
+
+        idx = input("\nChoose a container to connect to: ")
+        docker_client.containers.get(cassandra_containers[int(idx)].id).start()
         return
+    
     except:
         try:
             _input = input("No existing Cassandra container found. Would you like to create a new one? (Y/n): ")
@@ -196,22 +290,24 @@ def searchExistingCassandraSession():
         if _input == "n":
             exit()
         elif _input == "Y" or _input == "y" or _input == "":
-            properlyStartCassandra()
-            global session
+            createNode(initial=True)
             # Connect to the Cassandra cluster
             print(bcolors.OKGREEN + "Successfully created a Cassandra container" + bcolors.ENDC)
             print("Waiting for Cassandra cluster to start", end='', flush=True)
             while True:
                 try:
-                    # specify port 9043 to connect to exposed cassandra
-                    cluster = Cluster(['127.0.0.1'], port=9042)
-                    session = cluster.connect()
-                    print("\n" + bcolors.OKGREEN + "Connected to Cassandra cluster!\nSession: " + str(session) + bcolors.ENDC)
+                    # get last cassandra instance tuple
+                    next_tuple = getCassandraInstanceTuple(current=True)
+                    node_name = next_tuple[0]
+                    port = next_tuple[1]
+                    ip = next_tuple[2]
+                    startSession(ip, port, cold=True)
                     
                     global session_list
-                    session_list.append(session)
+                    session_list.append(cassandra_session)
                     break
                 except Exception as e:
+                    print(e.__str__(), flush=True)  
                     print(".", end='', flush=True)
                     time.sleep(1)
                     continue
@@ -219,13 +315,14 @@ def searchExistingCassandraSession():
         return
 
 def main():
+
     searchExistingCassandraSession()
 
     keyspace = ""
     _input = ""
 
     global lookup_consistency_level
-    global session
+    global cassandra_session
 
     while True:
         try:
@@ -242,7 +339,12 @@ def main():
                 break
 
             elif "start" == _input:
-                start_session()
+                nextNode = getCassandraInstanceTuple()
+                node_name = nextNode[0]
+                port = nextNode[1]
+                ip = nextNode[2]
+                createNode()
+                startSession(ip, port, cold=True)
                 continue
 
             elif "switch" in _input:
@@ -252,6 +354,16 @@ def main():
                     switchSession(int(_input.split(' ')[1]))
                 continue
         
+            elif "stress" in _input:
+                thread_count = int(_input.split(' ')[1])
+                threads = []
+                for i in range(thread_count):
+                    threads.append(Thread(target=insertMultiThreaded))
+                    threads[i].start()
+                for i in range(thread_count):
+                    threads[i].join()
+                continue
+
             elif "mt" in _input:
                 thread_count = int(_input.split(' ')[1])
                 threads = []
@@ -325,14 +437,19 @@ def main():
     close_session()
 
     try:
-        opt = input("Would you like to remove Cassandra from Docker network? (y/N): ")
+        opt = input("Would you like to remove Cassandra node(s) from Docker network? (y/N): ")
     except KeyboardInterrupt:
         opt = ""
 
     if opt == "y" or opt == "Y":
-        runOScmd("docker kill cassandra_exposed && docker network rm cassandra_exposed", stdout=True)
-        exit()
+
+        removeNetwork()
+
+        exit(0)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "clear":
+        removeNetwork()
+        exit(0)
     main()
