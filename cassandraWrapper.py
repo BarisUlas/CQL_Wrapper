@@ -10,6 +10,8 @@ from threading import Thread, Lock
 import random
 import string
 import docker
+import tarfile
+from io import BytesIO
 
 class bcolors:
     HEADER = '\033[95m'
@@ -28,12 +30,25 @@ mutex = Lock()
 session_list = []
 docker_client = None
 
-def startSession(ip_address, port, cold=False):
+
+def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
 
     global cassandra_session
     # Connect to the Cassandra cluster
     print("\nAttempting to connect to Cassandra cluster at " + ip_address + " on port " + str(port))
+    
     if cold:
+
+        if modify_port_and_reconnect:
+            
+            cluster_name = getCassandraInstanceTuple(current=True)[0]
+            node_id = docker_client.networks.list()
+
+            print("Phase 1: modifying Cassandra container port to " + str(port))
+            modifyContainerPort(port=port)
+
+            print(f"Phase 2: waiting for Cassandra cluster at {ip_address} with port {port} start")
+
         while True:
             try:
                 cluster = Cluster([ip_address], port=port)
@@ -91,8 +106,16 @@ def createNode(initial=False):
         ip = next_tuple[2]
 
     try:
-        docker_client.networks.create(node_name, driver="bridge")
-        docker_client.containers.run("cassandra", name=node_name, hostname=node_name, detach=True, network=node_name, ports={f'{port}/tcp': port})
+        network = docker_client.networks.create(node_name, driver="bridge")
+        container = docker_client.containers.run(
+            "cassandra",
+            name=node_name,
+            hostname=node_name,
+            detach=True,
+            network=network.name,
+            ports={f'{port}/tcp': int(port)},  # Replace desired_port with the port you want to use
+        )
+        print(bcolors.OKGREEN + f"Successfully created {node_name} at {ip} on port {port}" + bcolors.ENDC)
     except Exception as e:
         print(bcolors.FAIL + f"Failed to create {node_name} at {ip} on port {port}" + bcolors.ENDC)
         print(e.__str__())
@@ -102,6 +125,36 @@ def createNode(initial=False):
 def randomString(stringLength=10):
         letters = string.ascii_lowercase
         return ''.join(random.choice(letters) for i in range(stringLength))
+
+
+def modifyContainerPort(port):
+    global docker_client
+    container_name = str(getCassandraInstanceTuple(current=True)[0])
+    container = docker_client.containers.get(container_name)
+
+    # Download cassandra.yaml from the container
+    data, _ = container.get_archive("/etc/cassandra/cassandra.yaml")
+
+    # Extract cassandra.yaml from the tar archive
+    with tarfile.open(fileobj=BytesIO(b"".join(data)), mode="r") as tar:
+        # Get the content of cassandra.yaml
+        cassandra_yaml_content = tar.extractfile(tar.getnames()[0]).read()
+
+    # Modify the content as needed (replace this with your modification logic)
+    modified_content = cassandra_yaml_content.replace(b"native_transport_port: 9042", f"native_transport_port: {port}".encode())
+
+    # Create a tar archive with the modified content
+    tar_data = BytesIO()
+    with tarfile.open(fileobj=tar_data, mode="w") as tar:
+        tarinfo = tarfile.TarInfo(name="cassandra.yaml")
+        tarinfo.size = len(modified_content)
+        tar.addfile(tarinfo, BytesIO(modified_content))
+
+    # Put the modified cassandra.yaml back into the container
+    container.put_archive("/etc/cassandra", tar_data.getvalue())
+
+    # Restart the Cassandra container
+    container.restart()
 
 
 def insertMultiThreaded():
@@ -344,7 +397,7 @@ def main():
                 port = nextNode[1]
                 ip = nextNode[2]
                 createNode()
-                startSession(ip, port, cold=True)
+                startSession(ip, port, cold=True, modify_port_and_reconnect=True)
                 continue
 
             elif "switch" in _input:
