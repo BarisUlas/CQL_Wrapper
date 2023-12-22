@@ -5,6 +5,7 @@ import time
 from cassandra.cluster import Cluster
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
+from cassandra.query import QueryTrace
 import cassandra.cluster
 from threading import Thread, Lock
 import random
@@ -34,6 +35,17 @@ debug = True
 def debug(str):
     if debug:
         print(f"{bcolors.WARNING} [*] DEBUG: {str} {bcolors.ENDC}")
+
+def tracer():
+    global cassandra_session
+    cql_query = "TRACING ON;"
+    
+    # create 5 threads
+    cql_query = "SELECT * FROM demo.DEMO;"
+    session_cmd_tracer(cql_query)
+    
+    
+
 
 def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
 
@@ -179,6 +191,47 @@ def close_session():
     cassandra_session.shutdown()
     print("Closed Cassandra session")
 
+
+def session_cmd_tracer(cmd):
+    # so hacky but will be fixed soon (tm)
+    global cassandra_session
+    global lookup_consistency_level
+
+    print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
+    print("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
+    
+    # Create a SimpleStatement and execute the query
+    statement = SimpleStatement(cmd, consistency_level=lookup_consistency_level)
+    try:
+        output = cassandra_session.execute(statement, trace=True)
+    except Exception as e:
+        print(bcolors.FAIL + "Failed to execute cmd: " + str(e) + bcolors.ENDC)
+        return
+    
+    try:
+        qdetails = output.response_future.get_query_trace()
+        trace = QueryTrace(qdetails.trace_id, cassandra_session)
+        trace.populate(max_wait=10)
+
+    except Exception as e:
+        print(bcolors.FAIL + str(e) + bcolors.ENDC)
+        return
+
+
+    # Access the trace information
+    print("Request Type:", trace.request_type)
+    print("Duration:", trace.duration)
+    print("Coordinator:", trace.coordinator)
+    print("Started At:", trace.started_at)
+    print("Parameters:", trace.parameters)
+    print("Client:", trace.client)
+
+    # Access the events in the trace
+    for event in trace.events:
+        print(event)
+
+    return output
+
 def session_cmd(cmd):
     global cassandra_session
     global lookup_consistency_level
@@ -186,11 +239,17 @@ def session_cmd(cmd):
     print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
     print("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
     
-    SimpleStatement(cmd, consistency_level=lookup_consistency_level)
+    aa = SimpleStatement(cmd, consistency_level=lookup_consistency_level)
     # get output from cmd
     output = ""
+    trace = None
     try:
         output = cassandra_session.execute(cmd)
+        
+        trace = QueryTrace(output, cassandra_session)
+        trace.populate()
+        for event in trace.events:
+            print(event)
     except Exception as e:
         print(bcolors.FAIL + "Failed to execute cmd: " + e.__str__() + bcolors.ENDC)
         return
@@ -321,10 +380,12 @@ def searchExistingCassandraSession():
         containers = docker_client.containers.list()
         cassandra_containers = []
 
+        node_idx = 0
         for idx, container in enumerate(containers):
             if "cassandra" in container.name:
                 cassandra_containers.append(container)
-                print(f"[{idx}] {container.name[:-1]}{idx}")
+                print(f"[{node_idx}] {container.name[:-1]}{node_idx}")
+                node_idx += 1
         
         print("Found " + str(len(cassandra_containers)) + " Cassandra container(s)")
 
@@ -342,8 +403,10 @@ def searchExistingCassandraSession():
                     print("Invalid index")
                     exit()
                 startSession(f"127.0.0.{_input + 1}", f"{9042 + _input}")
+                tracer()
             else:
                 startSession("127.0.0.1", "9042")
+                
             return
     
     except:
