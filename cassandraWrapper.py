@@ -29,25 +29,25 @@ lookup_consistency_level = ConsistencyLevel.ONE
 mutex = Lock()
 session_list = []
 docker_client = None
+debug = True
 
+def debug(str):
+    if debug:
+        print(f"{bcolors.WARNING} [*] DEBUG: {str} {bcolors.ENDC}")
 
 def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
 
     global cassandra_session
     # Connect to the Cassandra cluster
-    print("\nAttempting to connect to Cassandra cluster at " + ip_address + " on port " + str(port))
+    print("\nAttempting to connect to Cassandra container at " + ip_address + " on port " + str(port))
     
     if cold:
 
         if modify_port_and_reconnect:
-            
-            cluster_name = getCassandraInstanceTuple(current=True)[0]
-            node_id = docker_client.networks.list()
 
-            print("Phase 1: modifying Cassandra container port to " + str(port))
+            print(f"[Phase 1]: modifying Cassandra container to listen on port {port}")
             modifyContainerPort(port=port)
-
-            print(f"Phase 2: waiting for Cassandra cluster at {ip_address} with port {port} start")
+            print(f"[Phase 2]: waiting for Cassandra container at {ip_address} with port {port} to start")
 
         while True:
             try:
@@ -69,10 +69,6 @@ def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
         session_list.append(cassandra_session)
         print(bcolors.OKGREEN + bcolors.BOLD + "\nConnected to Cassandra cluster at " + ip_address + "\nSession ID: " + str(cassandra_session.session_id) + bcolors.ENDC)
     
-    except cassandra.cluster.NoHostAvailable:
-        print("Node still initializing, please wait")
-        startSession(ip_address, port, cold=True)
-        return
     except Exception as e:
         print(bcolors.FAIL + bcolors.BOLD + "Failed to connect to Cassandra cluster, check the IP Address and port" + bcolors.ENDC)
         exit(-1)
@@ -80,13 +76,17 @@ def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
 def getCassandraInstanceTuple(current=False):
     # returns (next_cassandra_instance_name, next_cassandra_instance_port, next_cassandra_instance_ip)
 
-    global docker_client    
+    global docker_client 
+    networks = docker_client.networks.list()
 
-    last_cassandra_instance = 0
+    # refresh docker client   
+    docker_client = docker.from_env()
+    networks = docker_client.networks.list()
+    last_cassandra_instance = -1 if current else 0
     networks = docker_client.networks.list()
     for network in networks:
         if "cassandra_node_" in network.name:
-            last_cassandra_instance = int(network.name.split('_')[-1]) if current else int(network.name.split('_')[-1]) + 1
+            last_cassandra_instance += 1
 
     return (f"cassandra_node_{str(last_cassandra_instance)}", 9042 + last_cassandra_instance, f"127.0.0.{str(last_cassandra_instance + 1)}")
 
@@ -101,6 +101,7 @@ def createNode(initial=False):
         ip = "127.0.0.1"
     else:
         next_tuple = getCassandraInstanceTuple()
+        debug(f"getCassandraInstanceTuple reported: {next_tuple[0]} {next_tuple[1]} {next_tuple[2]}")
         node_name = next_tuple[0]
         port = next_tuple[1]
         ip = next_tuple[2]
@@ -116,11 +117,18 @@ def createNode(initial=False):
             ports={f'{port}/tcp': int(port)},  # Replace desired_port with the port you want to use
         )
         print(bcolors.OKGREEN + f"Successfully created {node_name} at {ip} on port {port}" + bcolors.ENDC)
+
     except Exception as e:
         print(bcolors.FAIL + f"Failed to create {node_name} at {ip} on port {port}" + bcolors.ENDC)
         print(e.__str__())
+        if "400" or "409" in e.__str__():
+            print(bcolors.OKBLUE + "Hint: Run wipe command to wipe out the existing networks" + bcolors.ENDC)
+            return -1
         exit(-1)
 
+    # refresh docker client
+    docker_client = docker.from_env()
+    return 0
 
 def randomString(stringLength=10):
         letters = string.ascii_lowercase
@@ -142,7 +150,7 @@ def modifyContainerPort(port):
 
     # Modify the content as needed (replace this with your modification logic)
     modified_content = cassandra_yaml_content.replace(b"native_transport_port: 9042", f"native_transport_port: {port}".encode())
-
+    
     # Create a tar archive with the modified content
     tar_data = BytesIO()
     with tarfile.open(fileobj=tar_data, mode="w") as tar:
@@ -153,7 +161,7 @@ def modifyContainerPort(port):
     # Put the modified cassandra.yaml back into the container
     container.put_archive("/etc/cassandra", tar_data.getvalue())
 
-    # Restart the Cassandra container
+    print(f"{bcolors.OKGREEN} Successfully modified listen port to {port}, restarting container... {bcolors.ENDC}")
     container.restart()
 
 
@@ -266,7 +274,8 @@ def printUsage():
     print("\nCassandra interactive shell wrapper\n")
     print(bcolors.BOLD + bcolors.UNDERLINE + "COMMANDS:" + bcolors.ENDC + "\n\n\
 help                           - print this message\n\
-start                          - start a new session\n\
+new                          - start a new session\n\
+wipe                           - wipe out existing Cassandra containers\n\
 switch [session index]         - switch to another session\n\
 ks [replication_factor]        - initialize keyspace with replication factor\n\
 initTable                      - initialize table\n\
@@ -287,7 +296,8 @@ def removeNetwork():
             if "cassandra_node_" in network.name:
                 print("Removing container: " + network.name)
                 try:
-                    docker_client.networks.get(network.id).remove()
+                    container = docker_client.networks.get(network.id)
+                    container.remove()
                 except Exception as e:
                     print(bcolors.FAIL + "Failed to remove network: " + network.name + bcolors.ENDC)
                     print(e.__str__())
@@ -314,26 +324,27 @@ def searchExistingCassandraSession():
         for idx, container in enumerate(containers):
             if "cassandra" in container.name:
                 cassandra_containers.append(container)
-                print(f"[{idx}] {container.name}")
+                print(f"[{idx}] {container.name[:-1]}{idx}")
         
         print("Found " + str(len(cassandra_containers)) + " Cassandra container(s)")
+
         if len(cassandra_containers) == 0:
             raise Exception("No Cassandra containers found")
         
-        elif True:
-
-            next_tuple = getCassandraInstanceTuple(current=True)
-            node_name = next_tuple[0]
-            port = next_tuple[1]
-            ip = next_tuple[2]
-
-            #startSession(ip, port, node_name)
-            startSession("127.0.0.1", "9042")
+        else:
+            if len(cassandra_containers) > 1:
+                try:
+                    _input = input("Multiple Cassandra containers found, which one would you like to connect to?\n> ")
+                except KeyboardInterrupt:
+                    exit()
+                _input = int(_input)
+                if _input >= len(cassandra_containers):
+                    print("Invalid index")
+                    exit()
+                startSession(f"127.0.0.{_input + 1}", f"{9042 + _input}")
+            else:
+                startSession("127.0.0.1", "9042")
             return
-
-        idx = input("\nChoose a container to connect to: ")
-        docker_client.containers.get(cassandra_containers[int(idx)].id).start()
-        return
     
     except:
         try:
@@ -343,7 +354,8 @@ def searchExistingCassandraSession():
         if _input == "n":
             exit()
         elif _input == "Y" or _input == "y" or _input == "":
-            createNode(initial=True)
+            if createNode(initial=True) != 0:
+                return
             # Connect to the Cassandra cluster
             print(bcolors.OKGREEN + "Successfully created a Cassandra container" + bcolors.ENDC)
             print("Waiting for Cassandra cluster to start", end='', flush=True)
@@ -391,12 +403,17 @@ def main():
             elif _input == "exit":
                 break
 
-            elif "start" == _input:
-                nextNode = getCassandraInstanceTuple()
-                node_name = nextNode[0]
+            elif "wipe" == _input:
+                removeNetwork()
+                exit(0)
+
+            elif "new" == _input:
+                createNode()
+                time.sleep(1)
+                nextNode = getCassandraInstanceTuple(current=True)
+                debug(f"start: getCassandraInstanceTuple reported: {nextNode[0]} {nextNode[1]} {nextNode[2]}")
                 port = nextNode[1]
                 ip = nextNode[2]
-                createNode()
                 startSession(ip, port, cold=True, modify_port_and_reconnect=True)
                 continue
 
@@ -495,9 +512,7 @@ def main():
         opt = ""
 
     if opt == "y" or opt == "Y":
-
         removeNetwork()
-
         exit(0)
 
 
