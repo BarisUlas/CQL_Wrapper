@@ -31,6 +31,7 @@ mutex = Lock()
 session_list = []
 docker_client = None
 debug = True
+tracing = False
 
 def debug(str):
     if debug:
@@ -192,7 +193,7 @@ def close_session():
     print("Closed Cassandra session")
 
 
-def session_cmd_tracer(cmd):
+def session_cmd(cmd):
     # so hacky but will be fixed soon (tm)
     global cassandra_session
     global lookup_consistency_level
@@ -217,22 +218,25 @@ def session_cmd_tracer(cmd):
         print(bcolors.FAIL + str(e) + bcolors.ENDC)
         return
 
+    if tracing:
+        print("\n" + bcolors.OKCYAN + "=" * 20 + "[ START TRACING LOG ]" + "=" * 20 + "\n" + bcolors.ENDC)
+        # Access the trace information
+        print("Request Type:", trace.request_type)
+        print("Duration:", trace.duration)
+        print("Coordinator:", trace.coordinator)
+        print("Started At:", trace.started_at)
+        print("Parameters:", trace.parameters)
+        print("Client:", trace.client)
 
-    # Access the trace information
-    print("Request Type:", trace.request_type)
-    print("Duration:", trace.duration)
-    print("Coordinator:", trace.coordinator)
-    print("Started At:", trace.started_at)
-    print("Parameters:", trace.parameters)
-    print("Client:", trace.client)
+        # Access the events in the trace
+        for event in trace.events:
+            print(event)
 
-    # Access the events in the trace
-    for event in trace.events:
-        print(event)
+        print("\n" + bcolors.OKCYAN + "=" * 20 + "[ END TRACING LOG ]" + "=" * 20 + bcolors.ENDC)
 
     return output
 
-def session_cmd(cmd):
+def session_cmd_old(cmd):
     global cassandra_session
     global lookup_consistency_level
 
@@ -344,6 +348,7 @@ print                          - print all data from table\n\
 clevel [consistency_level]     - set consistency level\n\
 mt                             - multi-threaded insert\n\
 stress [num_threads]           - multi-session insertion stress test\n\
+tracing [on/off]               - toggle tracing\n\
     ")
 
 def removeNetwork():
@@ -403,7 +408,6 @@ def searchExistingCassandraSession():
                     print("Invalid index")
                     exit()
                 startSession(f"127.0.0.{_input + 1}", f"{9042 + _input}")
-                tracer()
             else:
                 startSession("127.0.0.1", "9042")
                 
@@ -527,9 +531,14 @@ def main():
                 continue
             
             elif "tracing" in _input:
-                toggle = _input.split(' ')[1] == "on"
-                _input = _input.upper()
-                session_cmd(_input + ";")
+                global tracing
+                toggle = _input.split(' ')[1].lower() == "on"
+                if toggle:
+                    tracing = True
+                    print("Tracing is now enabled")
+                else:  
+                    tracing = False
+                    print("Tracing is now disabled")
                 continue
             
             elif "initTable" == _input:

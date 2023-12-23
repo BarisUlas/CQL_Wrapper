@@ -1,2 +1,2 @@
-cassandra
+cassandra-driver
 docker
