@@ -11,11 +11,14 @@ Then run it: `./cassandraWrapper.py`
    
 Note: The script requires `Docker Desktop` to be running to create cassandra nodes.   
 
-## Basic commands
+## Node and Session commands
 
 ### Creating a node
 
 To create a new node, simply run the script and it should ask you to create a new node if no existing nodes exists in the Docker network.
+
+If you want to create a new node, `node new` command can be used to create new cassandra node on a single machine. In order to create multiple nodes, make sure that 127.0.0.X route is up where X-1 is the index of the session.    
+You can use `sudo ifconfig lo0 alias 127.0.0.x up` command to enable the route for X-1 index node on UNIX-like machines.
 
 After creating a new Cassandra node, the script will wait for the container to be ready and will connect when the initalization completes. The amount of time it takes to run the cluster could depend on your hardware. For an idea, M1 Pro 8C is able to get it running at around 40 seconds.
 
@@ -26,20 +29,26 @@ Upon creation of the initial node, the script will automatically connect to it b
 ### Switching between sessions
 `session` prefix is used for session-related commands. `session ls` can be used to list existing sessions, and `session switch <session index>` can be used to switch to a different session.
 
-### Creating new sessions
-`session new` command can be used to create new cassandra sessions on a single machine. In order to create multiple nodes, make sure that 127.0.0.X route is up where X-1 is the index of the session.    
-You can use `sudo ifconfig lo0 alias 127.0.0.x up` command to enable the route for X-1 index node on UNIX-like machines.
-
 ### Removing sessions
 You can use the command `wipe <node index>/all` to remove a node or all nodes. Alternatively, you can pass `wipe` command at the start of the script to remove all cassandra-related networks from Docker.
+
+## Commands for manipulating table data
 
 ### Initializing the keyspace
 
 `ks <replication factor>` can be used to setup a keyspace with the given replication factor. The node will automatically create a keyspace called "DEMO" with the table "demo".
 
+### Initializing the table
+
+`initTable` command initializes the table with the name "DEMO" of the keyspace "demo". It is hardcoded to create two entities of `text` format (one of which is the primary key).
+
 ### Inserting elements to the table
 
-`insert (<str1>, <str2>)` command can used to insert elements to the table. 
+`insert (<str1>, <str2>)` command can be used to insert elements to the table. 
+
+### Deleting elements from the table
+
+`delete <primary key>` command can be used to delete element from the table.
 
 ### Listing elements inside the table
 
@@ -49,7 +58,7 @@ You can use the command `wipe <node index>/all` to remove a node or all nodes. A
 
 `tracing on/off` can be used to enable or disable tracing. 
 Example usage:   
-```py
+```
 > tracing on
 Tracing is now enabled
 

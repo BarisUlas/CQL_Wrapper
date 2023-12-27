@@ -37,15 +37,6 @@ def debug(str):
     if debug:
         print(f"{bcolors.WARNING} [*] DEBUG: {str} {bcolors.ENDC}")
 
-def tracer():
-    global cassandra_session
-    cql_query = "TRACING ON;"
-    
-    # create 5 threads
-    cql_query = "SELECT * FROM demo.DEMO;"
-    session_cmd_tracer(cql_query)
-    
-    
 
 
 def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
@@ -354,7 +345,7 @@ stress [num_threads]           - multi-session insertion stress test\n\
 tracing [on/off]               - toggle tracing\n\
     ")
 
-def removeNetwork():
+def removeContainer():
     # use docker library to remove docker containers from network
         global docker_client
         docker_client = docker.from_env()
@@ -363,12 +354,17 @@ def removeNetwork():
             if "cassandra_node_" in network.name:
                 print("Removing container: " + network.name)
                 try:
-                    container = docker_client.networks.get(network.id)
-                    container.remove()
+                    # stop and remove container
+                    cur_network = docker_client.networks.get(network.id)
+                    cur_container = docker_client.containers.get(network.name)
+                    cur_container.stop()
+                    #cur_network.disconnect(network.id)
+                    cur_container.remove()
                 except Exception as e:
-                    print(bcolors.FAIL + "Failed to remove network: " + network.name + bcolors.ENDC)
+                    print(bcolors.FAIL + "Failed to remove container: " + network.name + bcolors.ENDC)
                     print(e.__str__())
                     continue
+
 
 def searchExistingCassandraSession():
 
@@ -474,18 +470,8 @@ def main():
                 break
 
             elif "wipe" == _input:
-                removeNetwork()
+                removeContainer()
                 exit(0)
-
-            elif "new" == _input:
-                createNode()
-                time.sleep(1)
-                nextNode = getCassandraInstanceTuple(current=True)
-                debug(f"start: getCassandraInstanceTuple reported: {nextNode[0]} {nextNode[1]} {nextNode[2]}")
-                port = nextNode[1]
-                ip = nextNode[2]
-                startSession(ip, port, cold=True, modify_port_and_reconnect=True)
-                continue
 
             elif "session" in _input:
                 operation = _input.split(' ')[1]
@@ -494,12 +480,39 @@ def main():
                     for i in range(len(session_list)):
                         print(f"[{i}] {session_list[i].session_id}")
                     continue
+
                 if len(_input.split(' ')) == 1:
                     switchSession()
                 else:
                     switchSession(int(_input.split(' ')[1]))
                 continue
         
+            elif "node" in _input:
+                operation = _input.split(' ')[1]
+                if operation == "ls":
+                    print("Existing nodes:")
+                    current_node_tuple = getCassandraInstanceTuple(current=True)
+                    node_idx = int(current_node_tuple[1]) - 9042
+                    for i in range(node_idx + 1):
+                        print(f"[{i}] cassandra_node_{i}")
+                    continue
+
+                elif operation == "new":
+                    createNode()
+                    time.sleep(1)
+                    nextNode = getCassandraInstanceTuple(current=True)
+                    debug(f"start: getCassandraInstanceTuple reported: {nextNode[0]} {nextNode[1]} {nextNode[2]}")
+                    port = nextNode[1]
+                    ip = nextNode[2]
+                    startSession(ip, port, cold=True, modify_port_and_reconnect=True)
+                    continue
+
+                if len(_input.split(' ')) == 1:
+                    switchSession()
+                else:
+                    switchSession(int(_input.split(' ')[1]))
+                continue
+
             elif "stress" in _input:
                 thread_count = int(_input.split(' ')[1])
                 threads = []
@@ -577,6 +590,8 @@ def main():
                 for row in output:
                     print(row)
                 continue
+
+
             else:
                 print("Invalid command, type help for usage")
                 continue
@@ -593,12 +608,11 @@ def main():
         opt = ""
 
     if opt == "y" or opt == "Y":
-        removeNetwork()
+        removeContainer()
         exit(0)
-
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "clear":
-        removeNetwork()
+        removeContainer()
         exit(0)
     main()

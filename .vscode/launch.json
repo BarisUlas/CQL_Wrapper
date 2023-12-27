@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/cassandraWrapper.py",
-            "args":["--tracing=true"],
+            "args":["node", "ls"],
             "console": "integratedTerminal",
             "justMyCode": true
         }
