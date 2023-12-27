@@ -339,7 +339,10 @@ def printUsage():
 help                           - print this message\n\
 new                          - start a new session\n\
 wipe                           - wipe out existing Cassandra containers\n\
-switch [session index]         - switch to another session\n\
+session [subcommand]\n\
+    ls                         - list existing nodes \n\
+    switch [session_index]     - switch to existing session\n\
+    new                        - start a new session\n\
 ks [replication_factor]        - initialize keyspace with replication factor\n\
 initTable                      - initialize table\n\
 insert [userid] [meeting_time] - insert data into table\n\
@@ -484,7 +487,13 @@ def main():
                 startSession(ip, port, cold=True, modify_port_and_reconnect=True)
                 continue
 
-            elif "switch" in _input:
+            elif "session" in _input:
+                operation = _input.split(' ')[1]
+                if operation == "ls":
+                    print("Existing sessions:")
+                    for i in range(len(session_list)):
+                        print(f"[{i}] {session_list[i].session_id}")
+                    continue
                 if len(_input.split(' ')) == 1:
                     switchSession()
                 else:
