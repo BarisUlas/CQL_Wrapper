@@ -35,8 +35,7 @@ tracing = False
 
 def debug(str):
     if debug:
-        print(f"{bcolors.WARNING} [*] DEBUG: {str} {bcolors.ENDC}")
-
+        print(f"{bcolors.WARNING}[*] DEBUG: {str} {bcolors.ENDC}")
 
 
 def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
@@ -165,7 +164,7 @@ def modifyContainerPort(port):
     # Put the modified cassandra.yaml back into the container
     container.put_archive("/etc/cassandra", tar_data.getvalue())
 
-    print(f"{bcolors.OKGREEN} Successfully modified listen port to {port}, restarting container... {bcolors.ENDC}")
+    print(f"{bcolors.OKGREEN}Successfully modified listen port to {port}, restarting container... {bcolors.ENDC}")
     container.restart()
 
 
@@ -345,7 +344,7 @@ stress [num_threads]           - multi-session insertion stress test\n\
 tracing [on/off]               - toggle tracing\n\
     ")
 
-def removeContainer():
+def removeContainersAndNetworks():
     # use docker library to remove docker containers from network
         global docker_client
         docker_client = docker.from_env()
@@ -353,17 +352,25 @@ def removeContainer():
         for network in docker_network:
             if "cassandra_node_" in network.name:
                 print("Removing container: " + network.name)
+
+                    # try to remove container first
                 try:
-                    # stop and remove container
-                    cur_network = docker_client.networks.get(network.id)
-                    cur_container = docker_client.containers.get(network.name)
-                    cur_container.stop()
-                    #cur_network.disconnect(network.id)
-                    cur_container.remove()
-                except Exception as e:
-                    print(bcolors.FAIL + "Failed to remove container: " + network.name + bcolors.ENDC)
-                    print(e.__str__())
+                    container = docker_client.containers.get(network.name)
+                    container.stop()
+                    container.remove()
+                    print("Successfully removed container: " + network.name)
+                except:
+                    print("Failed to remove container: " + network.name)
+                
+                # try to remove network
+                try:
+                    network.remove()
+                    print("Successfully removed network: " + network.name)
+                except:
+                    print("Failed to remove network: " + network.name)
                     continue
+
+        print("Wipe operation completed")
 
 
 def searchExistingCassandraSession():
@@ -371,6 +378,7 @@ def searchExistingCassandraSession():
     # use docker library to check if docker is running
     global docker_client
     global cassandra_session
+    global session_list
     
     try:
         docker_client = docker.from_env()
@@ -394,23 +402,21 @@ def searchExistingCassandraSession():
         print("Found " + str(len(cassandra_containers)) + " Cassandra container(s)")
 
         if len(cassandra_containers) == 0:
-            raise Exception("No Cassandra containers found")
-        
+            raise Exception("No Cassandra containers found") 
+
+        if len(cassandra_containers) > 1:
+
+            try:
+                _input = input("Multiple Cassandra containers found, which one would you like to connect to?\n> ")
+            except KeyboardInterrupt:
+                exit()
+            _input = int(_input)
+            if _input >= len(cassandra_containers):
+                print("Invalid index")
+                exit()
+            startSession(f"127.0.0.{_input + 1}", f"{9042 + _input}")
         else:
-            if len(cassandra_containers) > 1:
-                try:
-                    _input = input("Multiple Cassandra containers found, which one would you like to connect to?\n> ")
-                except KeyboardInterrupt:
-                    exit()
-                _input = int(_input)
-                if _input >= len(cassandra_containers):
-                    print("Invalid index")
-                    exit()
-                startSession(f"127.0.0.{_input + 1}", f"{9042 + _input}")
-            else:
-                startSession("127.0.0.1", "9042")
-                
-            return
+            startSession("127.0.0.1", "9042")
     
     except:
         try:
@@ -429,12 +435,10 @@ def searchExistingCassandraSession():
                 try:
                     # get last cassandra instance tuple
                     next_tuple = getCassandraInstanceTuple(current=True)
-                    node_name = next_tuple[0]
                     port = next_tuple[1]
                     ip = next_tuple[2]
                     startSession(ip, port, cold=True)
                     
-                    global session_list
                     session_list.append(cassandra_session)
                     break
                 except Exception as e:
@@ -470,7 +474,7 @@ def main():
                 break
 
             elif "wipe" == _input:
-                removeContainer()
+                removeContainersAndNetworks()
                 exit(0)
 
             elif "session" in _input:
@@ -480,6 +484,10 @@ def main():
                     for i in range(len(session_list)):
                         print(f"[{i}] {session_list[i].session_id}")
                     continue
+
+                elif operation == "new":
+                    targetNodeIdx = _input.split(' ')[2]
+                    
 
                 if len(_input.split(' ')) == 1:
                     switchSession()
@@ -506,12 +514,6 @@ def main():
                     ip = nextNode[2]
                     startSession(ip, port, cold=True, modify_port_and_reconnect=True)
                     continue
-
-                if len(_input.split(' ')) == 1:
-                    switchSession()
-                else:
-                    switchSession(int(_input.split(' ')[1]))
-                continue
 
             elif "stress" in _input:
                 thread_count = int(_input.split(' ')[1])
@@ -608,11 +610,11 @@ def main():
         opt = ""
 
     if opt == "y" or opt == "Y":
-        removeContainer()
+        removeContainersAndNetworks()
         exit(0)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "clear":
-        removeContainer()
+    if len(sys.argv) > 1 and sys.argv[1] == "wipe":
+        removeContainersAndNetworks()
         exit(0)
     main()
