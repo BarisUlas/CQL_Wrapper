@@ -13,6 +13,9 @@ import string
 import docker
 import tarfile
 from io import BytesIO
+from datetime import datetime
+import os
+import re
 
 class bcolors:
     HEADER = '\033[95m'
@@ -32,6 +35,56 @@ session_list = []
 docker_client = None
 debug = True
 tracing = False
+uuid = None
+logging_file_path = None
+
+def testCase(session, iter):
+    for i in range(iter):
+        print(f"Thread {session} started")
+        for i in range(100):
+            cql_query = f"INSERT INTO demo.DEMO (id, clust1, clust2, val1, val2) VALUES (1, '{str(i%10)}', '{str(i)}', 'test', 'test')"
+            session_cmd(cql_query, custom_session=session)
+        print(f"Thread {session} finished inserting, now deleting")
+
+        for i in range(100):
+            cql_query = f"DELETE FROM demo.DEMO WHERE id = 1 AND clust1 = '{str(i%10)}'"
+            session_cmd(cql_query, custom_session=session)
+
+        print("PRINTING RESULTS")
+        cql_query = "SELECT * FROM demo.DEMO;"
+        output = session_cmd(cql_query)
+        for row in output:
+            print(row)
+        
+        # assertion check
+        # expected tombstone sayısına göre assert et
+        # insert/delete operation ile ilgili buglara bakıp, check et
+        # insert-insert bug'ını maniplue edip insert-del yapıp dene (lost update problemi)
+        
+def rangeTest():
+    for i in range(1000):
+        insertQuery = f"INSERT INTO demo.DEMO (id, clust1, clust2, val1, val2) VALUES (1, {int(i)}, {int(i)}, 'test', 'test');"
+        session_cmd(insertQuery)
+
+    # delete in range [0, 200]
+    deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 0 AND clust1 <= 200;"
+    session_cmd(deleteQuery)
+
+    # delete in range [300, 500]
+    deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 300 AND clust1 <= 500;"
+    session_cmd(deleteQuery)
+
+    # Delete individual cells from 600-700
+    for i in range(600, 700):
+        deleteQuery = f"DELETE FROM demo.DEMO WHERE id = 1 AND clust1 = {int(i)};"
+        session_cmd(deleteQuery)
+
+    selectQuery = "SELECT * FROM demo.DEMO;"
+    output = session_cmd(selectQuery)
+    for row in output:
+        print(row)
+        
+            
 
 def debug(str):
     if debug:
@@ -41,6 +94,7 @@ def debug(str):
 def startSession(ip_address, port, cold=False, modify_port_and_reconnect=False):
 
     global cassandra_session
+    global session_list
     # Connect to the Cassandra cluster
     print("\nAttempting to connect to Cassandra container at " + ip_address + " on port " + str(port))
     
@@ -111,13 +165,14 @@ def createNode(initial=False):
 
     try:
         network = docker_client.networks.create(node_name, driver="bridge")
-        container = docker_client.containers.run(
+        docker_client.containers.run(
             "cassandra",
             name=node_name,
             hostname=node_name,
             detach=True,
             network=network.name,
             ports={f'{port}/tcp': int(port)},  # Replace desired_port with the port you want to use
+            extra_hosts={node_name: ip},  # Replace desired_ip with the IP you want to use
         )
         print(bcolors.OKGREEN + f"Successfully created {node_name} at {ip} on port {port}" + bcolors.ENDC)
 
@@ -166,15 +221,6 @@ def modifyContainerPort(port):
 
     print(f"{bcolors.OKGREEN}Successfully modified listen port to {port}, restarting container... {bcolors.ENDC}")
     container.restart()
-
-
-def insertMultiThreaded():
-
-    global mutex
-    #mutex.acquire()
-    query = f"INSERT INTO demo.DEMO (userid, meeting_time) VALUES ('{randomString()}', '{randomString()}');"
-    session_cmd(query)
-    #mutex.release()
     
 
 def close_session():
@@ -182,14 +228,46 @@ def close_session():
     cassandra_session.shutdown()
     print("Closed Cassandra session")
 
+def file_logger(log_str):
+    global uuid
+    global logging_file_path
+    global tracing
 
-def session_cmd(cmd):
+    print(log_str)
+    if not tracing:
+        return
+
+    # clear ansii escape sequences if it is a string
+    if isinstance(log_str, str):
+        log_str = re.sub(r'\x1B\[[0-9;]*[mK]', '', log_str)
+
+    with open(logging_file_path, "a+") as f:
+        print(log_str, file=f)
+
+
+def session_cmd(cmd, custom_session=None):
     # so hacky but will be fixed soon (tm)
     global cassandra_session
     global lookup_consistency_level
+    global tracing
+    global uuid
+    global logging_file_path
 
-    print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
-    print("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
+    # check if a file that starts with uuid exists
+    if tracing:
+        for filename in os.listdir("./TraceLogs/"):
+            if logging_file_path == None:
+                # create the file
+                now = datetime.now()
+                with open(f"TraceLogs/tracing_{uuid}_{now.strftime('%d-%m-%Y_%H-%M-%S')}.txt", "w") as f:
+                    logging_file_path = f.name
+                    pass
+
+    if custom_session:
+        cassandra_session = custom_session
+
+    file_logger("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
+    file_logger("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
     
     # Create a SimpleStatement and execute the query
     statement = SimpleStatement(cmd, consistency_level=lookup_consistency_level)
@@ -209,44 +287,23 @@ def session_cmd(cmd):
         return
 
     if tracing:
-        print("\n" + bcolors.OKCYAN + "=" * 20 + "[ START TRACING LOG ]" + "=" * 20 + "\n" + bcolors.ENDC)
+        # get current date and time
+        # append date and time to filename
+        file_logger("\n" + bcolors.OKCYAN + "=" * 20 + "[ START TRACING LOG ]" + "=" * 20 + "\n" + bcolors.ENDC)
         # Access the trace information
-        print("Request Type:", trace.request_type)
-        print("Duration:", trace.duration)
-        print("Coordinator:", trace.coordinator)
-        print("Started At:", trace.started_at)
-        print("Parameters:", trace.parameters)
-        print("Client:", trace.client)
+        file_logger("Request Type:" + str(trace.request_type))
+        file_logger("Duration:" + str(trace.duration))
+        file_logger("Coordinator:" + str(trace.coordinator))
+        file_logger("Started At:" + str(trace.started_at))
+        file_logger("Parameters:" + str(trace.parameters))
+        file_logger("Client:" + str(trace.client))
 
         # Access the events in the trace
         for event in trace.events:
-            print(event)
+            file_logger(event)
 
-        print("\n" + bcolors.OKCYAN + "=" * 20 + "[ END TRACING LOG ]" + "=" * 20 + bcolors.ENDC)
+        file_logger("\n" + bcolors.OKCYAN + "=" * 20 + "[ END TRACING LOG ]" + "=" * 20 + bcolors.ENDC)
 
-    return output
-
-def session_cmd_old(cmd):
-    global cassandra_session
-    global lookup_consistency_level
-
-    print("Executing cmd: " + bcolors.BOLD + bcolors.OKBLUE + cmd + bcolors.ENDC)
-    print("Consistency level: " + bcolors.BOLD + bcolors.OKGREEN + str(lookup_consistency_level) + bcolors.ENDC)
-    
-    aa = SimpleStatement(cmd, consistency_level=lookup_consistency_level)
-    # get output from cmd
-    output = ""
-    trace = None
-    try:
-        output = cassandra_session.execute(cmd)
-        
-        trace = QueryTrace(output, cassandra_session)
-        trace.populate()
-        for event in trace.events:
-            print(event)
-    except Exception as e:
-        print(bcolors.FAIL + "Failed to execute cmd: " + e.__str__() + bcolors.ENDC)
-        return
     return output
 
 
@@ -254,11 +311,6 @@ def initKeyspace(replication_factor: int):
     cql_query = "CREATE KEYSPACE IF NOT EXISTS demo WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : " + str(replication_factor) + " };"
     session_cmd(cql_query)
 
-
-def runOScmd(cmd, stdout: bool = False):
-    print(f'Running cmd: {cmd}') if stdout else None
-    subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    
 
 def runCQLQuery(query):
     output = ""
@@ -273,23 +325,6 @@ def runCQLQuery(query):
         pass
     return output
     
-
-def getKeyspace():
-    query_output = session_cmd("DESCRIBE KEYSPACES;")
-    query_output = query_output.split('\n')
-    # remove first 4 elements and last 2 elements from query_output list
-    query_output = query_output[4:-3]
-
-    complete_output = []
-    for output in query_output:
-        output = output.split(" ")
-        while '' in output:
-            output.remove('')
-        complete_output += output
-
-    for key in complete_output:
-        if "system" not in key:
-            return key
         
 def switchSession(idx=None):
     global cassandra_session
@@ -333,6 +368,10 @@ session [subcommand]\n\
     ls                         - list existing nodes \n\
     switch [session_index]     - switch to existing session\n\
     new                        - start a new session\n\
+node [subcommand]\n\
+    new                        - start a new node\n\
+    switch [node_index]        - switch to different node\n\
+    wipe [node_index]          - wipe out node\n\
 ks [replication_factor]        - initialize keyspace with replication factor\n\
 initTable                      - initialize table\n\
 insert [userid] [meeting_time] - insert data into table\n\
@@ -344,11 +383,34 @@ stress [num_threads]           - multi-session insertion stress test\n\
 tracing [on/off]               - toggle tracing\n\
     ")
 
-def removeContainersAndNetworks():
-    # use docker library to remove docker containers from network
-        global docker_client
-        docker_client = docker.from_env()
-        docker_network = docker_client.networks.list()
+def removeContainersAndNetworks(idx=None):
+
+    global docker_client
+    docker_client = docker.from_env()
+    docker_network = docker_client.networks.list()
+        
+    if idx != None:
+        targetNodeName = f"cassandra_node_{idx}"
+        for network in docker_network:
+            if targetNodeName == network.name:
+                print("Removing container: " + network.name)
+                try:
+                    container = docker_client.containers.get(network.name)
+                    container.stop()
+                    container.remove()
+                    print("Successfully removed container: " + network.name)
+                except:
+                    print("Failed to remove container: " + network.name)
+                
+                # try to remove network
+                try:
+                    network.remove()
+                    print("Successfully removed network: " + network.name)
+                except:
+                    print("Failed to remove network: " + network.name)
+                    continue
+    else:
+        # use docker library to remove all cassandra docker containers from network
         for network in docker_network:
             if "cassandra_node_" in network.name:
                 print("Removing container: " + network.name)
@@ -424,7 +486,7 @@ def searchExistingCassandraSession():
         except KeyboardInterrupt:
             exit()
         if _input == "n":
-            exit()
+            return
         elif _input == "Y" or _input == "y" or _input == "":
             if createNode(initial=True) != 0:
                 return
@@ -458,6 +520,10 @@ def main():
 
     global lookup_consistency_level
     global cassandra_session
+    global session_list
+    global uuid
+
+    uuid = randomString(10)
 
     while True:
         try:
@@ -470,8 +536,35 @@ def main():
                 printUsage()
                 continue
 
+            elif "tc" in _input:
+                node_count = int(getCassandraInstanceTuple(current=True)[1]) - 9041
+                print(f"Found {node_count} nodes")
+                if node_count < 1:
+                    print(f"{bcolors.BOLD + bcolors.FAIL}You need at least two nodes to run this command{bcolors.ENDC}")
+                    continue
+
+                for i in range(node_count):
+                    startSession(f"127.0.0.{i + 1}", f"{9042 + i}")
+                
+                _iter = int(_input.split(' ')[1])
+                threads = []
+                for i in range(_iter):
+                    thread = Thread(target=testCase, args=(session_list[i],_iter))
+                    threads.append(thread)
+                    thread.start()
+
+                for i in range(len(threads)):
+                    threads[i].join()
+
+                continue
+            # ya sequential yap ya da thread join sonrası sayıları kontrol et
+
             elif _input == "exit":
                 break
+            
+            elif _input == "rt":
+                rangeTest()
+                continue
 
             elif "wipe" == _input:
                 removeContainersAndNetworks()
@@ -487,7 +580,7 @@ def main():
 
                 elif operation == "new":
                     targetNodeIdx = _input.split(' ')[2]
-                    
+
 
                 if len(_input.split(' ')) == 1:
                     switchSession()
@@ -504,6 +597,13 @@ def main():
                     for i in range(node_idx + 1):
                         print(f"[{i}] cassandra_node_{i}")
                     continue
+                if operation == "switch":
+                    targetNodeIdx = _input.split(' ')[2]
+                    print(f"Switching to cassandra_node_{targetNodeIdx}")
+                    targetNodeIP = f"127.0.0.{int(targetNodeIdx) + 1}"
+                    targetNodePort = f"{9042 + int(targetNodeIdx)}"
+                    startSession(targetNodeIP, targetNodePort)
+                    continue
 
                 elif operation == "new":
                     createNode()
@@ -515,25 +615,10 @@ def main():
                     startSession(ip, port, cold=True, modify_port_and_reconnect=True)
                     continue
 
-            elif "stress" in _input:
-                thread_count = int(_input.split(' ')[1])
-                threads = []
-                for i in range(thread_count):
-                    threads.append(Thread(target=insertMultiThreaded))
-                    threads[i].start()
-                for i in range(thread_count):
-                    threads[i].join()
-                continue
-
-            elif "mt" in _input:
-                thread_count = int(_input.split(' ')[1])
-                threads = []
-                for i in range(thread_count):
-                    threads.append(Thread(target=insertMultiThreaded))
-                    threads[i].start()
-                for i in range(thread_count):
-                    threads[i].join()
-                continue
+                elif operation == "wipe":
+                    targetNodeIdx = _input.split(' ')[2]
+                    removeContainersAndNetworks(int(targetNodeIdx))
+                    continue
 
             elif "clevel" in _input:
                 temp_consistency_level = _input.split(' ')[1]
@@ -566,10 +651,14 @@ def main():
                 continue
             
             elif "initTable" == _input:
-                cql_query = "CREATE TABLE IF NOT EXISTS demo.DEMO (\
-                            userid text PRIMARY KEY,\
-                            meeting_time text\
-                            );"
+                cql_query = "CREATE TABLE demo.DEMO (\
+                                id int,\
+                                clust1 int,\
+                                clust2 int,\
+                                val1 text,\
+                                val2 text,\
+                                PRIMARY KEY (id, clust1, clust2)\
+                            ) WITH CLUSTERING ORDER BY (clust1 ASC, clust2 ASC)"
                 session_cmd(cql_query)
                 continue
             
@@ -597,6 +686,7 @@ def main():
             else:
                 print("Invalid command, type help for usage")
                 continue
+
         except Exception as e:
             print(bcolors.WARNING + bcolors.UNDERLINE + "An expection occured\n\n" + e.__str__() + bcolors.ENDC)
             continue
