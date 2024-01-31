@@ -60,32 +60,60 @@ def testCase(session, iter):
         # expected tombstone sayısına göre assert et
         # insert/delete operation ile ilgili buglara bakıp, check et
         # insert-insert bug'ını maniplue edip insert-del yapıp dene (lost update problemi)
+            
+def deleteTableContents():
+    cql_query = "TRUNCATE demo.DEMO;"
+    session_cmd(cql_query)
         
 def rangeTest():
-    for i in range(1000):
-        insertQuery = f"INSERT INTO demo.DEMO (id, clust1, clust2, val1, val2) VALUES (1, {int(i)}, {int(i)}, 'test', 'test');"
-        session_cmd(insertQuery)
 
-    # delete in range [0, 200]
-    deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 0 AND clust1 <= 200;"
-    session_cmd(deleteQuery)
+    t = input("test choice > ")
+    if t == "0":
+        for i in range(100):
+            insertQuery = f"INSERT INTO demo.DEMO (id, clust1, clust2, val1, val2) VALUES (1, {int(i)}, {int(i)}, 'test', 'test');"
+            session_cmd(insertQuery)
 
-    # delete in range [300, 500]
-    deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 300 AND clust1 <= 500;"
-    session_cmd(deleteQuery)
+        # delete in range [0, 20]
+        #deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 0 AND clust1 <= 20;"
+        #session_cmd(deleteQuery)
 
-    # Delete individual cells from 600-700
-    for i in range(600, 700):
-        deleteQuery = f"DELETE FROM demo.DEMO WHERE id = 1 AND clust1 = {int(i)};"
+        # delete in range [30, 50]
+        #deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 30 AND clust1 <= 50;"
+        #session_cmd(deleteQuery)
+
+        # Delete individual cells from 60-70
+        for i in range(60, 70):
+           deleteQuery = f"DELETE FROM demo.DEMO WHERE id = 1 AND clust1 = {int(i)};"
+           session_cmd(deleteQuery)
+
+        selectQuery = "SELECT * FROM demo.DEMO;"
+        output = session_cmd(selectQuery)
+        for row in output:
+            print(row)
+        
+    elif t == "1":
+        for i in range(1000):
+            insertQuery = f"INSERT INTO demo.DEMO (id, clust1, clust2, val1, val2) VALUES (1, {int(i)}, {int(i)}, 'test', 'test');"
+            session_cmd(insertQuery)
+
+        # delete in range [0, 200]
+        deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 0 AND clust1 <= 200;"
         session_cmd(deleteQuery)
 
-    selectQuery = "SELECT * FROM demo.DEMO;"
-    output = session_cmd(selectQuery)
-    for row in output:
-        print(row)
-        
-            
+        # delete in range [300, 500]
+        deleteQuery = "DELETE FROM demo.DEMO WHERE id = 1 AND clust1 >= 300 AND clust1 <= 500;"
+        session_cmd(deleteQuery)
 
+        # Delete individual cells from 600-700
+        for i in range(600, 700):
+            deleteQuery = f"DELETE FROM demo.DEMO WHERE id = 1 AND clust1 = {int(i)};"
+            session_cmd(deleteQuery)
+
+        selectQuery = "SELECT * FROM demo.DEMO;"
+        output = session_cmd(selectQuery)
+        for row in output:
+            print(row)
+            
 def debug(str):
     if debug:
         print(f"{bcolors.WARNING}[*] DEBUG: {str} {bcolors.ENDC}")
@@ -245,7 +273,7 @@ def file_logger(log_str):
         print(log_str, file=f)
 
 
-def session_cmd(cmd, custom_session=None):
+def session_cmd(cmd, custom_session=None, for_ts_count=False):
     # so hacky but will be fixed soon (tm)
     global cassandra_session
     global lookup_consistency_level
@@ -285,6 +313,10 @@ def session_cmd(cmd, custom_session=None):
     except Exception as e:
         print(bcolors.FAIL + str(e) + bcolors.ENDC)
         return
+    
+    if for_ts_count:
+        arr = str(trace.events[6].description).split(' ')
+        return (int(arr[1]), int(arr[5]))
 
     if tracing:
         # get current date and time
@@ -379,7 +411,7 @@ delete [userid]                - delete data from table\n\
 print                          - print all data from table\n\
 clevel [consistency_level]     - set consistency level\n\
 mt                             - multi-threaded insert\n\
-stress [num_threads]           - multi-session insertion stress test\n\
+cellstat                       - get tombstone and live cell count\n\
 tracing [on/off]               - toggle tracing\n\
     ")
 
@@ -433,6 +465,14 @@ def removeContainersAndNetworks(idx=None):
                     continue
 
         print("Wipe operation completed")
+
+def getTSCountTuple():
+    global tracing
+    tracing = True
+    cql_query = "SELECT * FROM demo.DEMO;"
+    output = session_cmd(cql_query, for_ts_count=True)
+    tracing = False
+    return output
 
 
 def searchExistingCassandraSession():
@@ -561,6 +601,10 @@ def main():
 
             elif _input == "exit":
                 break
+
+            elif _input == "trunc":
+                deleteTableContents()
+                continue
             
             elif _input == "rt":
                 rangeTest()
@@ -673,6 +717,13 @@ def main():
                 data_arr = _input.split(' ')
                 query = f"DELETE FROM demo.DEMO WHERE userid = '{data_arr[1]}';"
                 session_cmd(query)
+                continue
+
+            elif "cellstat" in _input:
+                #global tracing
+                tracing = True
+                output = getTSCountTuple()
+                print(f"\nLive: {output[0]}\nTombstone: {output[1]}")
                 continue
 
             elif "print" in _input:
